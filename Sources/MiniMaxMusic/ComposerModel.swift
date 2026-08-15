@@ -19,6 +19,7 @@ final class ComposerModel {
 
     @ObservationIgnored private var modules: Music3Modules?
     @ObservationIgnored private var player: AVAudioPlayer?
+    @ObservationIgnored private var persistTask: Task<Void, Never>?
 
     var selectedProject: Project? {
         guard let selectedID else { return nil }
@@ -26,7 +27,17 @@ final class ComposerModel {
     }
 
     func persist() {
+        persistTask?.cancel()
         ProjectLibrary.save(projects)
+    }
+
+    func schedulePersist() {
+        persistTask?.cancel()
+        persistTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            ProjectLibrary.save(projects)
+        }
     }
 
     func task() async {
