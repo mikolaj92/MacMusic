@@ -1,0 +1,10 @@
+MacMusic
+Copyright 2026 mikolaj92
+
+macOS composer for MiniMax-Music3. The inference engine is
+https://github.com/mikolaj92/minimax-music3-swift
+
+This repository is not affiliated with MiniMax.
+
+MiniMax-Music3 model weights remain under the MiniMax-Music3 Community License:
+https://huggingface.co/MiniMaxAI/MiniMax-Music3
