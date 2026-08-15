@@ -67,20 +67,22 @@ final class ComposerModel {
             return
         }
         let project = projects[index]
+        let nextID = projects.indices.contains(index + 1) ? projects[index + 1].id : projects.dropLast().last?.id
         if selectedID == id {
             player?.stop()
         }
+        selectedID = nextID
+        projectPendingDeletion = nil
         ProjectLibrary.deleteFiles(for: project)
         projects.remove(at: index)
-        selectedID = projects.indices.contains(index) ? projects[index].id : projects.last?.id
-        projectPendingDeletion = nil
         status = "Deleted \(project.displayTitle)"
     }
 
     func symbolPicked(_ symbol: String) {
-        guard let selectedID else { return }
-        projects[id: selectedID].symbol = symbol
-        projects[id: selectedID].updatedAt = Date()
+        guard let selectedID, var project = projects[id: selectedID] else { return }
+        project.symbol = symbol
+        project.updatedAt = Date()
+        projects[id: selectedID] = project
     }
 
     func loadWeightsButtonTapped() async {
@@ -150,7 +152,10 @@ final class ComposerModel {
             pipelineProgress = nil
         }
         do {
-            var project = projects[id: selectedID]
+            guard var project = projects[id: selectedID] else {
+                status = "Pick a project first."
+                return
+            }
             status = "Generating…"
             let temp = FileManager.default.temporaryDirectory.appending(
                 path: "minimax-\(Int(Date().timeIntervalSince1970)).wav")
@@ -173,7 +178,9 @@ final class ComposerModel {
                 project.title = ProjectLibrary.title(from: project.lyrics)
             }
             projects[id: selectedID] = project
-            try play(url: project.fileURL!)
+            if let url = project.fileURL {
+                try play(url: url)
+            }
             status = "Saved \(project.displayTitle)"
         } catch {
             status = error.localizedDescription

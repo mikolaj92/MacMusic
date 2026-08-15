@@ -156,12 +156,11 @@ private struct LegacySong: Codable {
 }
 
 extension Array where Element: Identifiable {
-    subscript(id id: Element.ID) -> Element {
-        get {
-            first { $0.id == id }!
-        }
+    subscript(id id: Element.ID) -> Element? {
+        get { first { $0.id == id } }
         set {
-            if let index = firstIndex(where: { $0.id == id }) {
+            guard let index = firstIndex(where: { $0.id == id }) else { return }
+            if let newValue {
                 self[index] = newValue
             }
         }
