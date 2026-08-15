@@ -1,6 +1,21 @@
 import Foundation
+import Observation
 
-struct Project: Identifiable, Codable, Hashable, Sendable {
+struct ProjectRecord: Codable, Sendable {
+    var id: UUID
+    var title: String
+    var lyrics: String
+    var caption: String
+    var duration: Double
+    var seed: Int
+    var symbol: String
+    var createdAt: Date
+    var updatedAt: Date
+    var fileName: String?
+}
+
+@Observable
+final class Project: Identifiable {
     var id: UUID
     var title: String
     var lyrics: String
@@ -27,37 +42,93 @@ struct Project: Identifiable, Codable, Hashable, Sendable {
         return ProjectLibrary.title(from: lyrics)
     }
 
+    var record: ProjectRecord {
+        ProjectRecord(
+            id: id,
+            title: title,
+            lyrics: lyrics,
+            caption: caption,
+            duration: duration,
+            seed: seed,
+            symbol: symbol,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            fileName: fileName
+        )
+    }
+
+    init(record: ProjectRecord) {
+        id = record.id
+        title = record.title
+        lyrics = record.lyrics
+        caption = record.caption
+        duration = record.duration
+        seed = record.seed
+        symbol = record.symbol
+        createdAt = record.createdAt
+        updatedAt = record.updatedAt
+        fileName = record.fileName
+    }
+
     static func blank() -> Project {
         let now = Date()
         return Project(
-            id: UUID(),
-            title: "Untitled",
-            lyrics: "",
-            caption: "",
-            duration: 30,
-            seed: Int.random(in: 1...999_999),
-            symbol: Project.symbols[0],
-            createdAt: now,
-            updatedAt: now,
-            fileName: nil
+            record: ProjectRecord(
+                id: UUID(),
+                title: "Untitled",
+                lyrics: "",
+                caption: "",
+                duration: 30,
+                seed: Int.random(in: 1...999_999),
+                symbol: Project.symbols[0],
+                createdAt: now,
+                updatedAt: now,
+                fileName: nil
+            )
         )
     }
 
     func cloned() -> Project {
-        var copy = self
-        copy.id = UUID()
-        copy.title = "\(displayTitle) copy"
-        copy.createdAt = Date()
-        copy.updatedAt = copy.createdAt
+        let now = Date()
+        let copy = Project(
+            record: ProjectRecord(
+                id: UUID(),
+                title: "\(displayTitle) copy",
+                lyrics: lyrics,
+                caption: caption,
+                duration: duration,
+                seed: seed,
+                symbol: symbol,
+                createdAt: now,
+                updatedAt: now,
+                fileName: nil
+            )
+        )
         if let fileName, hasAudio {
             let newName = "\(copy.id.uuidString).wav"
             let dest = ProjectLibrary.root.appending(path: newName)
-            try? FileManager.default.copyItem(at: ProjectLibrary.root.appending(path: fileName), to: dest)
+            try? FileManager.default.copyItem(
+                at: ProjectLibrary.root.appending(path: fileName),
+                to: dest
+            )
             copy.fileName = newName
-        } else {
-            copy.fileName = nil
         }
         return copy
+    }
+
+    func attach(wav: URL) throws {
+        try FileManager.default.createDirectory(
+            at: ProjectLibrary.root,
+            withIntermediateDirectories: true
+        )
+        let name = "\(id.uuidString).wav"
+        let dest = ProjectLibrary.root.appending(path: name)
+        if FileManager.default.fileExists(atPath: dest.path) {
+            try FileManager.default.removeItem(at: dest)
+        }
+        try FileManager.default.copyItem(at: wav, to: dest)
+        fileName = name
+        updatedAt = Date()
     }
 
     static let symbols = [
@@ -88,31 +159,19 @@ enum ProjectLibrary {
 
     static func load() -> [Project] {
         guard let data = try? Data(contentsOf: indexURL) else { return [] }
-        if let projects = try? JSONDecoder().decode([Project].self, from: data) {
-            return projects
+        if let records = try? JSONDecoder().decode([ProjectRecord].self, from: data) {
+            return records.map(Project.init(record:))
         }
         if let songs = try? JSONDecoder().decode([LegacySong].self, from: data) {
-            return songs.map(\.project)
+            return songs.map { Project(record: $0.record) }
         }
         return []
     }
 
     static func save(_ projects: [Project]) {
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let data = try? JSONEncoder().encode(projects)
+        let data = try? JSONEncoder().encode(projects.map(\.record))
         try? data?.write(to: indexURL, options: .atomic)
-    }
-
-    static func attach(wav: URL, to project: inout Project) throws {
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let fileName = "\(project.id.uuidString).wav"
-        let dest = root.appending(path: fileName)
-        if FileManager.default.fileExists(atPath: dest.path) {
-            try FileManager.default.removeItem(at: dest)
-        }
-        try FileManager.default.copyItem(at: wav, to: dest)
-        project.fileName = fileName
-        project.updatedAt = Date()
     }
 
     static func deleteFiles(for project: Project) {
@@ -139,8 +198,8 @@ private struct LegacySong: Codable {
     var createdAt: Date
     var fileName: String
 
-    var project: Project {
-        Project(
+    var record: ProjectRecord {
+        ProjectRecord(
             id: id,
             title: title,
             lyrics: lyrics,
@@ -152,17 +211,5 @@ private struct LegacySong: Codable {
             updatedAt: createdAt,
             fileName: fileName
         )
-    }
-}
-
-extension Array where Element: Identifiable {
-    subscript(id id: Element.ID) -> Element? {
-        get { first { $0.id == id } }
-        set {
-            guard let index = firstIndex(where: { $0.id == id }) else { return }
-            if let newValue {
-                self[index] = newValue
-            }
-        }
     }
 }

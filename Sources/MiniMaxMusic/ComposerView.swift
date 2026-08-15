@@ -41,7 +41,7 @@ struct ComposerView: View {
         List(selection: $model.selectedID) {
             ForEach(model.projects) { project in
                 NavigationLink(value: project.id) {
-                    projectRow(project)
+                    ProjectRow(project: project)
                 }
                 .contextMenu {
                     Button("Play", systemImage: "play.fill") {
@@ -80,33 +80,16 @@ struct ComposerView: View {
         }
     }
 
+    @ViewBuilder
     private var detail: some View {
-        Group {
-            if let id = model.selectedID, model.projects[id: id] != nil {
-                ProjectEditor(projectID: id, model: model)
-                    .id(id)
-            } else {
-                ContentUnavailableView(
-                    "Select a Project",
-                    systemImage: "music.note",
-                    description: Text("Or create one from the sidebar.")
-                )
-            }
-        }
-    }
-
-    private func projectRow(_ project: Project) -> some View {
-        Label {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(project.displayTitle)
-                    .lineLimit(1)
-                Text(project.hasAudio ? "\(Int(project.duration)) s" : "Draft")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        } icon: {
-            Image(systemName: project.symbol)
-                .foregroundStyle(Theme.ultramarine)
+        if let project = model.selectedProject {
+            ProjectEditor(project: project, model: model)
+        } else {
+            ContentUnavailableView(
+                "Select a Project",
+                systemImage: "music.note",
+                description: Text("Or create one from the sidebar.")
+            )
         }
     }
 
@@ -128,31 +111,38 @@ struct ComposerView: View {
     }
 }
 
-struct ProjectEditor: View {
-    let projectID: Project.ID
-    @Bindable var model: ComposerModel
+struct ProjectRow: View {
+    var project: Project
 
     var body: some View {
-        if let index = model.projects.firstIndex(where: { $0.id == projectID }) {
-            editor($model.projects[index])
-        } else {
-            ContentUnavailableView(
-                "Select a Project",
-                systemImage: "music.note",
-                description: Text("Or create one from the sidebar.")
-            )
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(project.displayTitle)
+                    .lineLimit(1)
+                Text(project.hasAudio ? "\(Int(project.duration)) s" : "Draft")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } icon: {
+            Image(systemName: project.symbol)
+                .foregroundStyle(Theme.ultramarine)
         }
     }
+}
 
-    private func editor(_ project: Binding<Project>) -> some View {
+struct ProjectEditor: View {
+    @Bindable var project: Project
+    var model: ComposerModel
+
+    var body: some View {
         VStack(spacing: 0) {
-            TextField("Title", text: project.title)
+            TextField("Title", text: $project.title)
                 .font(.largeTitle.weight(.semibold))
                 .textFieldStyle(.plain)
                 .padding(.horizontal, 28)
                 .padding(.top, 20)
                 .padding(.bottom, 8)
-            TextEditor(text: project.lyrics)
+            TextEditor(text: $project.lyrics)
                 .font(.system(.title3, design: .serif))
                 .scrollContentBackground(.hidden)
                 .lineSpacing(6)
@@ -162,7 +152,7 @@ struct ProjectEditor: View {
                 Label("Caption", systemImage: "text.alignleft")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                TextEditor(text: project.caption)
+                TextEditor(text: $project.caption)
                     .font(.body)
                     .scrollContentBackground(.hidden)
                     .frame(minHeight: 72, maxHeight: 120)
@@ -171,17 +161,17 @@ struct ProjectEditor: View {
             .padding(.vertical, 12)
         }
         .safeAreaInset(edge: .bottom) {
-            generateBar(project)
+            generateBar
         }
-        .navigationTitle(project.wrappedValue.displayTitle)
+        .navigationTitle(project.displayTitle)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 ControlGroup {
                     Button("Play", systemImage: "play.fill") {
-                        model.playButtonTapped()
+                        model.playButtonTapped(project)
                     }
-                    .disabled(!project.wrappedValue.hasAudio)
-                    if let url = project.wrappedValue.fileURL, project.wrappedValue.hasAudio {
+                    .disabled(!project.hasAudio)
+                    if let url = project.fileURL, project.hasAudio {
                         ShareLink(item: url) {
                             Label("Share", systemImage: "square.and.arrow.up")
                         }
@@ -190,7 +180,7 @@ struct ProjectEditor: View {
                             .disabled(true)
                     }
                 }
-                Menu("Symbol", systemImage: project.wrappedValue.symbol) {
+                Menu("Symbol", systemImage: project.symbol) {
                     ForEach(Project.symbols, id: \.self) { symbol in
                         Button(symbol, systemImage: symbol) {
                             model.symbolPicked(symbol)
@@ -205,9 +195,14 @@ struct ProjectEditor: View {
                 }
             }
         }
+        .onChange(of: project.title) { model.persist() }
+        .onChange(of: project.lyrics) { model.persist() }
+        .onChange(of: project.caption) { model.persist() }
+        .onChange(of: project.duration) { model.persist() }
+        .onChange(of: project.seed) { model.persist() }
     }
 
-    private func generateBar(_ project: Binding<Project>) -> some View {
+    private var generateBar: some View {
         VStack(spacing: 10) {
             if let progress = model.downloadProgress {
                 labeledBar("Download", value: progress, detail: "\(Int(progress * 100))%")
@@ -221,9 +216,9 @@ struct ProjectEditor: View {
             }
             HStack(spacing: 16) {
                 Label {
-                    Slider(value: project.duration, in: 4...90, step: 1)
+                    Slider(value: $project.duration, in: 4...90, step: 1)
                         .frame(maxWidth: 180)
-                    Text("\(Int(project.wrappedValue.duration)) s")
+                    Text("\(Int(project.duration)) s")
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                         .frame(width: 40, alignment: .leading)
@@ -232,7 +227,7 @@ struct ProjectEditor: View {
                         .foregroundStyle(.secondary)
                 }
                 Label {
-                    TextField("Seed", value: project.seed, format: .number)
+                    TextField("Seed", value: $project.seed, format: .number)
                         .textFieldStyle(.plain)
                         .frame(width: 72)
                 } icon: {
@@ -244,8 +239,8 @@ struct ProjectEditor: View {
                     Task { await model.generateButtonTapped() }
                 } label: {
                     Label(
-                        project.wrappedValue.hasAudio ? "Regenerate" : "Generate",
-                        systemImage: project.wrappedValue.hasAudio ? "arrow.clockwise" : "waveform"
+                        project.hasAudio ? "Regenerate" : "Generate",
+                        systemImage: project.hasAudio ? "arrow.clockwise" : "waveform"
                     )
                 }
                 .buttonStyle(.glassProminent)

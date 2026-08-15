@@ -6,9 +6,7 @@ import Observation
 @MainActor
 @Observable
 final class ComposerModel {
-    var projects: [Project] = ProjectLibrary.load() {
-        didSet { ProjectLibrary.save(projects) }
-    }
+    var projects: [Project] = ProjectLibrary.load()
     var selectedID: Project.ID?
     var weightsPath = ComposerModel.defaultWeightsPath()
     var status = "Load MiniMax-Music3 weights, then generate."
@@ -27,6 +25,10 @@ final class ComposerModel {
         return projects.first { $0.id == selectedID }
     }
 
+    func persist() {
+        ProjectLibrary.save(projects)
+    }
+
     func task() async {
         if selectedID == nil {
             selectedID = projects.first?.id
@@ -40,6 +42,7 @@ final class ComposerModel {
         let project = Project.blank()
         projects.insert(project, at: 0)
         selectedID = project.id
+        persist()
         status = "New project"
     }
 
@@ -52,6 +55,7 @@ final class ComposerModel {
             projects.insert(copy, at: 0)
         }
         selectedID = copy.id
+        persist()
         status = "Duplicated \(copy.displayTitle)"
     }
 
@@ -67,7 +71,10 @@ final class ComposerModel {
             return
         }
         let project = projects[index]
-        let nextID = projects.indices.contains(index + 1) ? projects[index + 1].id : projects.dropLast().last?.id
+        let nextID =
+            projects.indices.contains(index + 1)
+            ? projects[index + 1].id
+            : projects.dropLast().last?.id
         if selectedID == id {
             player?.stop()
         }
@@ -75,14 +82,15 @@ final class ComposerModel {
         projectPendingDeletion = nil
         ProjectLibrary.deleteFiles(for: project)
         projects.remove(at: index)
+        persist()
         status = "Deleted \(project.displayTitle)"
     }
 
     func symbolPicked(_ symbol: String) {
-        guard let selectedID, var project = projects[id: selectedID] else { return }
+        guard let project = selectedProject else { return }
         project.symbol = symbol
         project.updatedAt = Date()
-        projects[id: selectedID] = project
+        persist()
     }
 
     func loadWeightsButtonTapped() async {
@@ -137,7 +145,7 @@ final class ComposerModel {
     }
 
     func generateButtonTapped() async {
-        guard let selectedID, projects.contains(where: { $0.id == selectedID }) else {
+        guard let project = selectedProject else {
             status = "Pick a project first."
             return
         }
@@ -152,10 +160,6 @@ final class ComposerModel {
             pipelineProgress = nil
         }
         do {
-            guard var project = projects[id: selectedID] else {
-                status = "Pick a project first."
-                return
-            }
             status = "Generating…"
             let temp = FileManager.default.temporaryDirectory.appending(
                 path: "minimax-\(Int(Date().timeIntervalSince1970)).wav")
@@ -173,11 +177,11 @@ final class ComposerModel {
                     self.status = "\(progress.label) \(progress.completed)/\(progress.total)"
                 }
             }
-            try ProjectLibrary.attach(wav: out, to: &project)
+            try project.attach(wav: out)
             if project.title == "Untitled" {
                 project.title = ProjectLibrary.title(from: project.lyrics)
             }
-            projects[id: selectedID] = project
+            persist()
             if let url = project.fileURL {
                 try play(url: url)
             }
@@ -194,7 +198,16 @@ final class ComposerModel {
     }
 
     func playButtonTapped() {
-        guard let project = selectedProject, let url = project.fileURL, project.hasAudio else {
+        guard let project = selectedProject else {
+            status = "This project has no audio yet."
+            return
+        }
+        playButtonTapped(project)
+    }
+
+    func playButtonTapped(_ project: Project) {
+        selectedID = project.id
+        guard let url = project.fileURL, project.hasAudio else {
             status = "This project has no audio yet."
             return
         }
@@ -204,11 +217,6 @@ final class ComposerModel {
         } catch {
             status = error.localizedDescription
         }
-    }
-
-    func playButtonTapped(_ project: Project) {
-        selectedID = project.id
-        playButtonTapped()
     }
 
     func projectTapped(_ project: Project) {
