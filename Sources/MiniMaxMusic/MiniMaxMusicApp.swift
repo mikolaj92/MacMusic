@@ -7,8 +7,10 @@ struct MiniMaxMusicApp: App {
     var body: some Scene {
         WindowGroup {
             ComposerView(model: model)
+                .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         }
-        .defaultSize(width: 980, height: 720)
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1180, height: 760)
         .windowResizability(.contentMinSize)
     }
 }
