@@ -6,18 +6,25 @@ struct ComposerView: View {
     @Bindable var model: ComposerModel
 
     var body: some View {
-        ZStack {
-            Theme.backdrop
-            HStack(alignment: .top, spacing: 16) {
-                libraryColumn
-                lyricsColumn
-                inspectorColumn
-            }
-            .padding(20)
+        NavigationSplitView {
+            sidebar
+        } detail: {
+            detail
         }
-        .background(WindowChrome())
-        .frame(minWidth: 1080, minHeight: 680)
-        .preferredColorScheme(.dark)
+        .navigationSplitViewStyle(.balanced)
+        .tint(Theme.ultramarine)
+        .frame(minWidth: 980, minHeight: 640)
+        .confirmationDialog(
+            "Delete this project?",
+            isPresented: $model.projectPendingDeletion.isPresented,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                model.deleteConfirmationButtonTapped()
+            }
+        } message: {
+            Text("The lyrics stay gone. Audio is removed if it exists.")
+        }
         .fileImporter(
             isPresented: $model.showingFolderPicker,
             allowedContentTypes: [.folder],
@@ -30,196 +37,75 @@ struct ComposerView: View {
         }
     }
 
-    private var libraryColumn: some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: 14) {
-                columnLabel("Library", systemImage: "music.note.list")
-                if model.songs.isEmpty {
-                    Spacer(minLength: 24)
-                    VStack(spacing: 8) {
-                        Image(systemName: "waveform")
-                            .font(.largeTitle)
-                            .foregroundStyle(Theme.ultramarine.opacity(0.8))
-                        Text("Nothing here yet.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
+    private var sidebar: some View {
+        List(selection: $model.selectedID) {
+            ForEach(model.projects) { project in
+                NavigationLink(value: project.id) {
+                    projectRow(project)
+                }
+                .contextMenu {
+                    Button("Play", systemImage: "play.fill") {
+                        model.playButtonTapped(project)
                     }
-                    .frame(maxWidth: .infinity)
-                    Spacer()
-                } else {
-                    ScrollView {
-                        LazyVStack(spacing: 10) {
-                            ForEach(model.songs) { song in
-                                songRow(song)
-                            }
-                        }
+                    .disabled(!project.hasAudio)
+                    Button("Duplicate", systemImage: "plus.square.on.square") {
+                        model.projectTapped(project)
+                        model.cloneProjectButtonTapped()
+                    }
+                    Button("Delete", systemImage: "trash", role: .destructive) {
+                        model.projectTapped(project)
+                        model.deleteProjectButtonTapped()
                     }
                 }
             }
         }
-        .frame(minWidth: 250, idealWidth: 280, maxWidth: 320)
+        .navigationTitle("Latarnia")
+        .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 320)
+        .overlay {
+            if model.projects.isEmpty {
+                ContentUnavailableView(
+                    "No Projects",
+                    systemImage: "music.note.list",
+                    description: Text("Start a draft. Generate when it feels ready.")
+                )
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button("New Project", systemImage: "square.and.pencil") {
+                    model.newProjectButtonTapped()
+                }
+                .help("New Project")
+            }
+        }
     }
 
-    private var lyricsColumn: some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: 12) {
-                columnLabel("Lyrics", systemImage: "text.quote")
-                Text("Keep [verse] and [chorus] on their own line.")
+    private var detail: some View {
+        Group {
+            if let id = model.selectedID, model.projects.contains(where: { $0.id == id }) {
+                ProjectEditor(project: $model.projects[id: id], model: model)
+            } else {
+                ContentUnavailableView(
+                    "Select a Project",
+                    systemImage: "music.note",
+                    description: Text("Or create one from the sidebar.")
+                )
+            }
+        }
+    }
+
+    private func projectRow(_ project: Project) -> some View {
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(project.displayTitle)
+                    .lineLimit(1)
+                Text(project.hasAudio ? "\(Int(project.duration)) s" : "Draft")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                TextEditor(text: $model.lyrics)
-                    .font(.system(.title3, design: .serif))
-                    .scrollContentBackground(.hidden)
-                    .foregroundStyle(Theme.mist)
-                    .lineSpacing(6)
             }
-        }
-        .frame(minWidth: 380)
-    }
-
-    private var inspectorColumn: some View {
-        VStack(spacing: 16) {
-            GlassCard(padding: 16) {
-                VStack(alignment: .leading, spacing: 12) {
-                    columnLabel("Caption", systemImage: "sparkles")
-                    TextEditor(text: $model.caption)
-                        .font(.body)
-                        .scrollContentBackground(.hidden)
-                        .foregroundStyle(Theme.mist)
-                        .frame(minHeight: 92)
-                }
-            }
-            .frame(minHeight: 180)
-
-            GlassCard(padding: 16) {
-                VStack(alignment: .leading, spacing: 16) {
-                    columnLabel("Generate", systemImage: "waveform.circle")
-                    HStack(spacing: 12) {
-                        Text("\(Int(model.durationSeconds)) s")
-                            .font(.system(.title2, design: .rounded).weight(.medium))
-                            .monospacedDigit()
-                            .frame(width: 64, alignment: .leading)
-                        Slider(value: $model.durationSeconds, in: 4...90, step: 1)
-                            .tint(Theme.ultramarine)
-                    }
-                    HStack {
-                        Text("Seed")
-                            .foregroundStyle(.secondary)
-                        TextField("Seed", value: $model.seed, format: .number)
-                            .textFieldStyle(.plain)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .glassEffect(.regular, in: .rect(cornerRadius: 10, style: .continuous))
-                    }
-                    if let progress = model.downloadProgress {
-                        labeledBar("Download", value: progress, detail: "\(Int(progress * 100))%")
-                    }
-                    if let progress = model.pipelineProgress {
-                        labeledBar(
-                            progress.label,
-                            value: progress.fraction,
-                            detail: "\(progress.completed)/\(progress.total)"
-                        )
-                    }
-                    Text(model.status)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                    Button {
-                        Task { await model.generateButtonTapped() }
-                    } label: {
-                        Label("Generate Song", systemImage: "play.fill")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.glassProminent)
-                    .controlSize(.large)
-                    .tint(Theme.ultramarine)
-                    .disabled(model.isWorking || !model.engineReady)
-                }
-            }
-
-            GlassCard(padding: 16) {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        columnLabel("Weights", systemImage: "externaldrive")
-                        Spacer()
-                        Text(model.engineReady ? "Ready" : "Not loaded")
-                            .font(.caption.weight(.medium))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .foregroundStyle(model.engineReady ? Theme.ultramarine : .secondary)
-                            .glassEffect(.regular, in: .capsule)
-                    }
-                    TextField("Converted MLX folder", text: $model.weightsPath)
-                        .textFieldStyle(.plain)
-                        .font(.caption)
-                        .padding(10)
-                        .glassEffect(.regular, in: .rect(cornerRadius: 12, style: .continuous))
-                    HStack(spacing: 8) {
-                        Button("Choose…") { model.showingFolderPicker = true }
-                        Button("Load") { Task { await model.loadWeightsButtonTapped() } }
-                            .disabled(model.isWorking || model.weightsPath.isEmpty)
-                        Button("Download 4-bit") { Task { await model.downloadWeightsButtonTapped() } }
-                            .disabled(model.isWorking)
-                    }
-                    .buttonStyle(.glass)
-                    .controlSize(.small)
-                }
-            }
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(minWidth: 320, idealWidth: 360, maxWidth: 400)
-    }
-
-    private func songRow(_ song: GeneratedSong) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(song.title)
-                .font(.headline)
-                .lineLimit(2)
-            Text("\(Int(song.duration)) s · \(song.createdAt, format: .dateTime.month().day().hour().minute())")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            HStack(spacing: 6) {
-                Button("Play") { model.playButtonTapped(song) }
-                ShareLink(item: song.fileURL) {
-                    Text("Share")
-                }
-                Button("Reuse") { model.reuseButtonTapped(song) }
-                Spacer()
-                Button("Delete", role: .destructive) { model.deleteButtonTapped(song) }
-            }
-            .buttonStyle(.glass)
-            .controlSize(.mini)
-            .disabled(model.isWorking)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(
-            .regular.tint(model.lastSongID == song.id ? Theme.ultramarine : .clear),
-            in: .rect(cornerRadius: 16, style: .continuous)
-        )
-    }
-
-    private func columnLabel(_ title: String, systemImage: String) -> some View {
-        Label(title, systemImage: systemImage)
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(.secondary)
-            .labelStyle(.titleAndIcon)
-    }
-
-    private func labeledBar(_ title: String, value: Double, detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(title)
-                    .font(.caption.weight(.medium))
-                Spacer()
-                Text(detail)
-                    .font(.caption)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-            }
-            ProgressView(value: min(max(value, 0), 1))
-                .tint(Theme.ultramarine)
+        } icon: {
+            Image(systemName: project.symbol)
+                .foregroundStyle(Theme.ultramarine)
         }
     }
 
@@ -237,6 +123,159 @@ struct ComposerView: View {
             }
         case .failure(let error):
             model.status = error.localizedDescription
+        }
+    }
+}
+
+struct ProjectEditor: View {
+    @Binding var project: Project
+    @Bindable var model: ComposerModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            TextField("Title", text: $project.title)
+                .font(.largeTitle.weight(.semibold))
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 28)
+                .padding(.top, 20)
+                .padding(.bottom, 8)
+            TextEditor(text: $project.lyrics)
+                .font(.system(.title3, design: .serif))
+                .scrollContentBackground(.hidden)
+                .lineSpacing(6)
+                .padding(.horizontal, 20)
+            Divider().opacity(0.4)
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Caption", systemImage: "text.alignleft")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                TextEditor(text: $project.caption)
+                    .font(.body)
+                    .scrollContentBackground(.hidden)
+                    .frame(minHeight: 72, maxHeight: 120)
+            }
+            .padding(.horizontal, 28)
+            .padding(.vertical, 12)
+        }
+        .safeAreaInset(edge: .bottom) {
+            generateBar
+        }
+        .navigationTitle(project.displayTitle)
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                ControlGroup {
+                    Button("Play", systemImage: "play.fill") {
+                        model.playButtonTapped()
+                    }
+                    .disabled(!project.hasAudio)
+                    if let url = project.fileURL, project.hasAudio {
+                        ShareLink(item: url) {
+                            Label("Share", systemImage: "square.and.arrow.up")
+                        }
+                    } else {
+                        Button("Share", systemImage: "square.and.arrow.up") {}
+                            .disabled(true)
+                    }
+                }
+                Menu("Symbol", systemImage: project.symbol) {
+                    ForEach(Project.symbols, id: \.self) { symbol in
+                        Button(symbol, systemImage: symbol) {
+                            model.symbolPicked(symbol)
+                        }
+                    }
+                }
+                Button("Duplicate", systemImage: "plus.square.on.square") {
+                    model.cloneProjectButtonTapped()
+                }
+                Button("Delete", systemImage: "trash", role: .destructive) {
+                    model.deleteProjectButtonTapped()
+                }
+            }
+        }
+    }
+
+    private var generateBar: some View {
+        VStack(spacing: 10) {
+            if let progress = model.downloadProgress {
+                labeledBar("Download", value: progress, detail: "\(Int(progress * 100))%")
+            }
+            if let progress = model.pipelineProgress {
+                labeledBar(
+                    progress.label,
+                    value: progress.fraction,
+                    detail: "\(progress.completed)/\(progress.total)"
+                )
+            }
+            HStack(spacing: 16) {
+                Label {
+                    Slider(value: $project.duration, in: 4...90, step: 1)
+                        .frame(maxWidth: 180)
+                    Text("\(Int(project.duration)) s")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .frame(width: 40, alignment: .leading)
+                } icon: {
+                    Image(systemName: "timer")
+                        .foregroundStyle(.secondary)
+                }
+                Label {
+                    TextField("Seed", value: $project.seed, format: .number)
+                        .textFieldStyle(.plain)
+                        .frame(width: 72)
+                } icon: {
+                    Image(systemName: "dice")
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    Task { await model.generateButtonTapped() }
+                } label: {
+                    Label(
+                        project.hasAudio ? "Regenerate" : "Generate",
+                        systemImage: project.hasAudio ? "arrow.clockwise" : "waveform"
+                    )
+                }
+                .buttonStyle(.glassProminent)
+                .tint(Theme.ultramarine)
+                .disabled(model.isWorking || !model.engineReady)
+            }
+            HStack {
+                Image(systemName: model.engineReady ? "checkmark.circle.fill" : "circle.dashed")
+                    .foregroundStyle(model.engineReady ? Theme.ultramarine : .secondary)
+                Text(model.status)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer()
+            }
+            .font(.caption)
+        }
+        .padding(14)
+        .glassEffect(.regular, in: .rect(cornerRadius: 18, style: .continuous))
+        .padding(12)
+    }
+
+    private func labeledBar(_ title: String, value: Double, detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(detail)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            .font(.caption)
+            ProgressView(value: min(max(value, 0), 1))
+                .tint(Theme.ultramarine)
+        }
+    }
+}
+
+extension Optional {
+    var isPresented: Bool {
+        get { self != nil }
+        set {
+            guard !newValue else { return }
+            self = nil
         }
     }
 }

@@ -6,31 +6,81 @@ import Observation
 @MainActor
 @Observable
 final class ComposerModel {
-    var lyrics = ComposerModel.defaultLyrics
-    var caption = ComposerModel.defaultCaption
-    var durationSeconds = 30.0
-    var seed = 42
+    var projects: [Project] = ProjectLibrary.load() {
+        didSet { ProjectLibrary.save(projects) }
+    }
+    var selectedID: Project.ID?
     var weightsPath = ComposerModel.defaultWeightsPath()
     var status = "Load MiniMax-Music3 weights, then generate."
     var isWorking = false
     var engineReady = false
     var downloadProgress: Double?
     var pipelineProgress: PipelineProgress?
-    var songs: [GeneratedSong] = SongLibrary.load()
-    var lastSongID: GeneratedSong.ID?
     var showingFolderPicker = false
+    var projectPendingDeletion: Project.ID?
 
     @ObservationIgnored private var modules: Music3Modules?
     @ObservationIgnored private var player: AVAudioPlayer?
 
-    var lastSong: GeneratedSong? {
-        songs.first { $0.id == lastSongID } ?? songs.first
+    var selectedProject: Project? {
+        guard let selectedID else { return nil }
+        return projects.first { $0.id == selectedID }
     }
 
     func task() async {
+        if selectedID == nil {
+            selectedID = projects.first?.id
+        }
         let root = URL(fileURLWithPath: weightsPath)
         guard ModelDownload.isReady(at: root) else { return }
         await loadWeightsButtonTapped()
+    }
+
+    func newProjectButtonTapped() {
+        let project = Project.blank()
+        projects.insert(project, at: 0)
+        selectedID = project.id
+        status = "New project"
+    }
+
+    func cloneProjectButtonTapped() {
+        guard let selected = selectedProject else { return }
+        let copy = selected.cloned()
+        if let index = projects.firstIndex(where: { $0.id == selected.id }) {
+            projects.insert(copy, at: index + 1)
+        } else {
+            projects.insert(copy, at: 0)
+        }
+        selectedID = copy.id
+        status = "Duplicated \(copy.displayTitle)"
+    }
+
+    func deleteProjectButtonTapped() {
+        projectPendingDeletion = selectedID
+    }
+
+    func deleteConfirmationButtonTapped() {
+        guard let id = projectPendingDeletion,
+            let index = projects.firstIndex(where: { $0.id == id })
+        else {
+            projectPendingDeletion = nil
+            return
+        }
+        let project = projects[index]
+        if selectedID == id {
+            player?.stop()
+        }
+        ProjectLibrary.deleteFiles(for: project)
+        projects.remove(at: index)
+        selectedID = projects.indices.contains(index) ? projects[index].id : projects.last?.id
+        projectPendingDeletion = nil
+        status = "Deleted \(project.displayTitle)"
+    }
+
+    func symbolPicked(_ symbol: String) {
+        guard let selectedID else { return }
+        projects[id: selectedID].symbol = symbol
+        projects[id: selectedID].updatedAt = Date()
     }
 
     func loadWeightsButtonTapped() async {
@@ -85,6 +135,10 @@ final class ComposerModel {
     }
 
     func generateButtonTapped() async {
+        guard let selectedID, projects.contains(where: { $0.id == selectedID }) else {
+            status = "Pick a project first."
+            return
+        }
         guard let modules else {
             status = "Load weights first."
             return
@@ -96,21 +150,17 @@ final class ComposerModel {
             pipelineProgress = nil
         }
         do {
+            var project = projects[id: selectedID]
             status = "Generating…"
-            let loaded = modules
-            let lyrics = lyrics
-            let caption = caption
-            let duration = durationSeconds
-            let seed = seed
             let temp = FileManager.default.temporaryDirectory.appending(
                 path: "minimax-\(Int(Date().timeIntervalSince1970)).wav")
             let out = try await generate(
-                modules: loaded,
-                lyrics: lyrics,
-                caption: caption,
-                duration: Float(duration),
+                modules: modules,
+                lyrics: project.lyrics,
+                caption: project.caption,
+                duration: Float(project.duration),
                 steps: 30,
-                seed: UInt64(max(0, seed)),
+                seed: UInt64(max(0, project.seed)),
                 output: temp
             ) { progress in
                 Task { @MainActor in
@@ -118,17 +168,13 @@ final class ComposerModel {
                     self.status = "\(progress.label) \(progress.completed)/\(progress.total)"
                 }
             }
-            let song = try SongLibrary.add(
-                wav: out,
-                lyrics: lyrics,
-                caption: caption,
-                duration: duration,
-                seed: seed
-            )
-            songs = SongLibrary.load()
-            lastSongID = song.id
-            try play(url: song.fileURL)
-            status = "Saved \(song.title)"
+            try ProjectLibrary.attach(wav: out, to: &project)
+            if project.title == "Untitled" {
+                project.title = ProjectLibrary.title(from: project.lyrics)
+            }
+            projects[id: selectedID] = project
+            try play(url: project.fileURL!)
+            status = "Saved \(project.displayTitle)"
         } catch {
             status = error.localizedDescription
         }
@@ -140,32 +186,26 @@ final class ComposerModel {
         UserDefaults.standard.set(weightsPath, forKey: "weightsPath")
     }
 
-    func playButtonTapped(_ song: GeneratedSong) {
+    func playButtonTapped() {
+        guard let project = selectedProject, let url = project.fileURL, project.hasAudio else {
+            status = "This project has no audio yet."
+            return
+        }
         do {
-            try play(url: song.fileURL)
-            lastSongID = song.id
-            status = "Playing \(song.title)"
+            try play(url: url)
+            status = "Playing \(project.displayTitle)"
         } catch {
             status = error.localizedDescription
         }
     }
 
-    func deleteButtonTapped(_ song: GeneratedSong) {
-        if lastSongID == song.id {
-            lastSongID = nil
-            player?.stop()
-        }
-        SongLibrary.delete(song)
-        songs = SongLibrary.load()
-        status = "Deleted \(song.title)"
+    func playButtonTapped(_ project: Project) {
+        selectedID = project.id
+        playButtonTapped()
     }
 
-    func reuseButtonTapped(_ song: GeneratedSong) {
-        lyrics = song.lyrics
-        caption = song.caption
-        durationSeconds = song.duration
-        seed = song.seed
-        status = "Loaded \(song.title) into editor"
+    func projectTapped(_ project: Project) {
+        selectedID = project.id
     }
 
     private func play(url: URL) throws {
@@ -173,19 +213,6 @@ final class ComposerModel {
         player?.prepareToPlay()
         player?.play()
     }
-
-    static let defaultLyrics = """
-        [verse]
-        MiniMax na Maku, lokalnie, bez chmury
-        MLX kręci beat, metalowe tony
-
-        [chorus]
-        Śpiewam z Macintosha, ram w unified
-        Piosenka z wag, nie z serwera, tylko z nas
-        """
-
-    static let defaultCaption =
-        "Genre: light energetic funk. BPM: 112. Key: E major. Language: Polish. Warm male vocal, chicken-scratch guitar, tight bass, no accordion."
 
     static func defaultWeightsPath() -> String {
         if let last = UserDefaults.standard.string(forKey: "weightsPath"),
@@ -197,10 +224,10 @@ final class ComposerModel {
         for _ in 0..<10 {
             url.deleteLastPathComponent()
             for name in ["mlx-4bit", "mlx-8bit", "mlx"] {
-                let candidate = url.appending(path: "weights/\(name)")
-                if ModelDownload.isReady(at: candidate) {
-                    return candidate.path
-                }
+                let here = url.appending(path: "weights/\(name)")
+                if ModelDownload.isReady(at: here) { return here.path }
+                let sibling = url.appending(path: "minimusic/weights/\(name)")
+                if ModelDownload.isReady(at: sibling) { return sibling.path }
             }
         }
         return ModelDownload.defaultDirectory
